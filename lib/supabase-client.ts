@@ -1,25 +1,30 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Get environment variables
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+let supabaseClient: any = null;
 
-// Check if they exist
-if (!supabaseUrl) {
-  console.error('❌ NEXT_PUBLIC_SUPABASE_URL is missing');
-}
-if (!supabaseKey) {
-  console.error('❌ NEXT_PUBLIC_SUPABASE_ANON_KEY is missing');
-}
+function getSupabaseClient() {
+  if (supabaseClient) {
+    return supabaseClient;
+  }
 
-// Create client (will throw error if missing)
-export const supabase = createClient(
-  supabaseUrl || '',
-  supabaseKey || ''
-);
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl) {
+    throw new Error('NEXT_PUBLIC_SUPABASE_URL is not defined');
+  }
+  if (!supabaseKey) {
+    throw new Error('NEXT_PUBLIC_SUPABASE_ANON_KEY is not defined');
+  }
+
+  supabaseClient = createClient(supabaseUrl, supabaseKey);
+  return supabaseClient;
+}
 
 export async function saveVaultData(secretKeyHash: string, data: any) {
   try {
+    const supabase = getSupabaseClient();
+    
     const { data: result, error } = await supabase
       .from('vault_data')
       .upsert({
@@ -43,6 +48,8 @@ export async function saveVaultData(secretKeyHash: string, data: any) {
 
 export async function getVaultData(secretKeyHash: string) {
   try {
+    const supabase = getSupabaseClient();
+    
     const { data, error } = await supabase
       .from('vault_data')
       .select('*')
