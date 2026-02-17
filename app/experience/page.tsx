@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { getData } from '@/lib/indexeddb';
+import CryptoJS from 'crypto-js';
 
 // Smooth Typewriter Component
 function TypewriterText({ text, delay = 0, speed = 50 }: { text: string; delay?: number; speed?: number }) {
@@ -58,6 +58,7 @@ export default function ExperiencePage() {
   const [finalLetter, setFinalLetter] = useState('');
   const [timeRemaining, setTimeRemaining] = useState('');
   const [showVideoPlayer, setShowVideoPlayer] = useState(false);
+  const [error, setError] = useState('');
   const bgAudioRef = useRef<HTMLAudioElement | null>(null);
   const router = useRouter();
 
@@ -124,7 +125,7 @@ export default function ExperiencePage() {
     }
   };
 
-  // ===== MAIN EFFECT - LOAD DATA FROM INDEXEDDB =====
+  // ===== MAIN EFFECT - LOAD DATA FROM SUPABASE =====
   useEffect(() => {
     const sessionKey = localStorage.getItem('sessionKey');
     if (!sessionKey) {
@@ -135,44 +136,84 @@ export default function ExperiencePage() {
     setIsAuthorized(true);
 
     const loadData = async () => {
-  // Check if key came from URL
-  const params = new URLSearchParams(window.location.search);
-  const keyFromUrl = params.get('key');
-  
-  if (keyFromUrl) {
-    localStorage.setItem('sessionKey', keyFromUrl);
-    localStorage.setItem('sessionTime', Date.now().toString());
-  }
+      // Check if key came from URL
+      const params = new URLSearchParams(window.location.search);
+      const keyFromUrl = params.get('key');
+      
+      if (keyFromUrl) {
+        localStorage.setItem('sessionKey', keyFromUrl);
+        localStorage.setItem('sessionTime', Date.now().toString());
+      }
 
-  try {
-        const storedData = await getData();
+      try {
+        // Import Supabase function
+        const { getVaultData } = await import('@/lib/supabase-client');
         
+        // Get the stored session key
+        const storedSessionKey = localStorage.getItem('sessionKey');
+        if (!storedSessionKey) {
+          setPhase('locked');
+          setError('❌ Birthday vault not found. Ask the person to set it up first.');
+          return;
+        }
+
+        // Hash the session key
+        const keyHash = CryptoJS.SHA256(storedSessionKey).toString();
+
+        // Get data from Supabase
+        const result = await getVaultData(keyHash);
+
         let loadedMemories: any[] = [];
         let audio: any = {};
         let letter = '';
         let birthdayDate = '';
         
-        if (storedData) {
-          birthdayDate = storedData.birthdayDate;
-          
-          // Check if we can access the experience
-          const { canAccess, timeRemaining: remaining } = canAccessExperience(birthdayDate);
-          
-          if (!canAccess) {
-            setPhase('locked');
-            setTimeRemaining(remaining);
+        if (!result.success || !result.data) {
+          // Try fallback to IndexedDB for backward compatibility
+          try {
+            const { getData } = await import('@/lib/indexeddb');
+            const fallbackData = await getData();
             
-            // Update time every minute
-            const timer = setInterval(() => {
-              const { timeRemaining: updatedTime } = canAccessExperience(birthdayDate);
-              setTimeRemaining(updatedTime);
-            }, 60000);
-            return () => clearInterval(timer);
-          }
+            if (!fallbackData) {
+              setPhase('locked');
+              setError('❌ Birthday vault not found. Ask the person to set it up first.');
+              return;
+            }
 
-          loadedMemories = storedData.memories || [];
-          audio = storedData.audio || {};
-          letter = storedData.finalLetter || '';
+            birthdayDate = fallbackData.birthdayDate;
+            loadedMemories = fallbackData.memories || [];
+            audio = fallbackData.audio || {};
+            letter = fallbackData.finalLetter || '';
+          } catch (e) {
+            console.error('Fallback error:', e);
+            setPhase('locked');
+            setError('❌ Birthday vault not found. Ask the person to set it up first.');
+            return;
+          }
+        } else {
+          const vaultData = result.data;
+          birthdayDate = vaultData.birthday_date;
+          loadedMemories = vaultData.memories || [];
+          audio = {
+            backgroundMusic: vaultData.background_music,
+            heartbeat: vaultData.heartbeat_sound,
+          };
+          letter = vaultData.final_letter || '';
+        }
+
+        // Check if we can access the experience
+        const { canAccess, timeRemaining: remaining } = canAccessExperience(birthdayDate);
+        
+        if (!canAccess) {
+          setPhase('locked');
+          setTimeRemaining(remaining);
+          
+          // Update time every minute
+          const timer = setInterval(() => {
+            const { timeRemaining: updatedTime } = canAccessExperience(birthdayDate);
+            setTimeRemaining(updatedTime);
+          }, 60000);
+          return () => clearInterval(timer);
         }
 
         setMemories(loadedMemories);
@@ -188,48 +229,48 @@ export default function ExperiencePage() {
         return () => timers.forEach(t => clearTimeout(t));
       } catch (e) {
         console.error('Failed to load data:', e);
-        // Fallback to empty state
-        setPhase('blackfade');
+        setPhase('locked');
+        setError('❌ Error loading vault. Please try again.');
       }
     };
 
     loadData();
   }, [router]);
 
-// Background music - plays from greeting through letter phases
-useEffect(() => {
-  const musicPhases = ['greeting', 'memories', 'surprise', 'letter'];
-  
-  if (musicPhases.includes(phase) && audioFiles.backgroundMusic) {
-    try {
-      // Create new audio only if needed
-      if (!bgAudioRef.current || bgAudioRef.current.paused) {
-        // Clean up old audio
-        if (bgAudioRef.current) {
-          bgAudioRef.current.pause();
+  // Background music - plays from greeting through letter phases
+  useEffect(() => {
+    const musicPhases = ['greeting', 'memories', 'surprise', 'letter'];
+    
+    if (musicPhases.includes(phase) && audioFiles.backgroundMusic) {
+      try {
+        // Create new audio only if needed
+        if (!bgAudioRef.current || bgAudioRef.current.paused) {
+          // Clean up old audio
+          if (bgAudioRef.current) {
+            bgAudioRef.current.pause();
+          }
+          
+          // Create and play new audio
+          const audio = new Audio();
+          audio.src = audioFiles.backgroundMusic;
+          audio.loop = true;
+          audio.volume = 0.4;
+          audio.play().catch(e => console.error('Background music error:', e));
+          
+          bgAudioRef.current = audio;
         }
-        
-        // Create and play new audio
-        const audio = new Audio();
-        audio.src = audioFiles.backgroundMusic;
-        audio.loop = true;
-        audio.volume = 0.4;
-        audio.play().catch(e => console.error('Background music error:', e));
-        
-        bgAudioRef.current = audio;
+      } catch (e) {
+        console.error('Audio setup error:', e);
       }
-    } catch (e) {
-      console.error('Audio setup error:', e);
+    } else if (phase === 'dashboard') {
+      // Stop music when reaching dashboard
+      if (bgAudioRef.current) {
+        bgAudioRef.current.pause();
+        bgAudioRef.current.currentTime = 0;
+        bgAudioRef.current = null;
+      }
     }
-  } else if (phase === 'dashboard') {
-    // Stop music when reaching dashboard
-    if (bgAudioRef.current) {
-      bgAudioRef.current.pause();
-      bgAudioRef.current.currentTime = 0;
-      bgAudioRef.current = null;
-    }
-  }
-}, [phase, audioFiles.backgroundMusic]);
+  }, [phase, audioFiles.backgroundMusic]);
 
   const handleMemoryClick = () => {
     if (currentMemoryIndex < memories.length - 1) {
@@ -260,6 +301,11 @@ useEffect(() => {
         `}</style>
         <div className="max-w-2xl w-full text-center">
           <div className="backdrop-blur-md bg-white/90 rounded-3xl p-8 md:p-12 shadow-2xl border border-white/20">
+            {error && (
+              <div className="mb-6 p-4 bg-red-100 border border-red-300 rounded-lg text-red-700 text-sm font-light">
+                {error}
+              </div>
+            )}
             <div className="text-5xl md:text-6xl mb-6 pulse-animate">⏳</div>
             <h1 className="text-3xl md:text-4xl font-light text-purple-900 mb-4">
               Please wait, Sweetheart 💕

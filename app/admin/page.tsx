@@ -121,10 +121,6 @@ export default function AdminPanel() {
     setTimeout(() => setSuccess(''), 3000);
   };
 
-  const hashSecretKey = (key: string): string => {
-    return CryptoJS.SHA256(key).toString();
-  };
-
   const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -189,6 +185,7 @@ export default function AdminPanel() {
     });
   };
 
+  // ✅ CORRECTED: saveBirthdayAndKey with proper Supabase integration
   const saveBirthdayAndKey = async () => {
     setError('');
     setSuccess('');
@@ -222,8 +219,30 @@ export default function AdminPanel() {
         heartbeatUrl = await convertToBase64(audioFiles.heartbeat);
       }
 
-      const keyHash = hashSecretKey(secretKey);
+      // ✅ USE SAME HASHING AS EXPERIENCE PAGE (CryptoJS.SHA256)
+      const keyHash = CryptoJS.SHA256(secretKey).toString();
 
+      setUploadStatus('Saving to cloud...');
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // ✅ USE SUPABASE TO SAVE
+      const { saveVaultData } = await import('@/lib/supabase-client');
+      
+      const result = await saveVaultData(keyHash, {
+        birthdayDate,
+        memories,
+        finalLetter,
+        audio: {
+          backgroundMusic: backgroundMusicUrl,
+          heartbeat: heartbeatUrl,
+        }
+      });
+
+      if (!result.success) {
+        throw result.error;
+      }
+
+      // ✅ ALSO SAVE TO INDEXEDDB AS BACKUP
       const adminData = {
         birthdayDate,
         secretKeyHash: keyHash,
@@ -235,9 +254,6 @@ export default function AdminPanel() {
           heartbeat: heartbeatUrl,
         }
       };
-
-      setUploadStatus('Saving to database...');
-      await new Promise(resolve => setTimeout(resolve, 100));
 
       await saveData(adminData);
 
